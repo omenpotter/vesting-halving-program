@@ -1,6 +1,6 @@
-# Vesting Halving Program - Usage Guide
+# Liquidity Lock Program - Usage Guide
 
-Complete guide for integrating and using the Vesting Halving Program.
+Complete guide for integrating and using the Liquidity Lock Program.
 
 ## Table of Contents
 1. [Quick Start](#quick-start)
@@ -25,62 +25,24 @@ npm install @coral-xyz/anchor @solana/web3.js @solana/spl-token
 const anchor = require("@coral-xyz/anchor");
 const { PublicKey } = require("@solana/web3.js");
 
-const PROGRAM_ID = new PublicKey("6Bg1RuRv2yHxJbSodDMKH2dFbDQKGeZwKkDhzZxXQ7xc");
+const PROGRAM_ID = new PublicKey("BLM1UpG3ZJQnini6sG3oqznTQnsZCCuPUaLDVHEH4Ka1");
 ```
 
-### 3. Initialize Vesting
+### 3. Lock Liquidity
 ```javascript
-// Create token with your wallet as mint authority
-const tokenMint = await createMint(
-  connection,
-  payer,
-  payer.publicKey,
-  null,
-  9 // decimals
-);
+// Lock 1000 LP tokens for 365 days
+const lockAmount = new anchor.BN(1000 * 1e9);
+const unlockTime = Math.floor(Date.now() / 1000) + (365 * 24 * 60 * 60);
 
-// Derive vesting PDA
-const [vestingPDA] = PublicKey.findProgramAddressSync(
-  [Buffer.from("vesting_halving"), tokenMint.toBuffer()],
-  PROGRAM_ID
-);
-
-// Get vault ATA
-const vaultATA = await getAssociatedTokenAddress(
-  tokenMint,
-  vestingPDA,
-  true
-);
-
-// Initialize vesting (100k tokens, 365 day halving)
 await program.methods
-  .initializeVestingHalving(
-    new anchor.BN(100_000 * 1e9),  // 100k tokens (with 9 decimals)
-    new anchor.BN(31_536_000)       // 365 days in seconds
-  )
+  .initializeLock(lockAmount, new anchor.BN(unlockTime))
   .accounts({
-    vestingHalving: vestingPDA,
-    tokenMint: tokenMint,
-    vaultTokenAccount: vaultATA,
-    beneficiary: beneficiary.publicKey,
-    mintAuthority: payer.publicKey,
-    payer: payer.publicKey,
-    tokenProgram: TOKEN_PROGRAM_ID,
-    associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-    systemProgram: SystemProgram.programId,
-    rent: SYSVAR_RENT_PUBKEY,
+    lock: lockPDA,
+    tokenMint: lpTokenMint,
+    authority: wallet.publicKey,
+    // ... other accounts
   })
   .rpc();
-
-// IMPORTANT: Transfer mint authority to vesting PDA
-await setAuthority(
-  connection,
-  payer,
-  tokenMint,
-  payer.publicKey,
-  AuthorityType.MintTokens,
-  vestingPDA
-);
 ```
 
 ---
@@ -95,14 +57,14 @@ await setAuthority(
 
 ### Setup
 ```bash
-# Clone the repository
-git clone https://github.com/omenpotter/vesting-halving-program.git
-cd vesting-halving-program
+# Clone repository
+git clone https://github.com/omenpotter/liquidity-lock-program.git
+cd liquidity-lock-program
 
 # Install dependencies
 npm install
 
-# Build (optional, for verification)
+# Build (optional)
 anchor build
 ```
 
@@ -113,19 +75,17 @@ anchor build
 ### Complete Workflow
 ```javascript
 const anchor = require("@coral-xyz/anchor");
-const { 
-  PublicKey, 
-  Keypair, 
-  SystemProgram 
+const {
+  PublicKey,
+  Keypair,
+  SystemProgram
 } = require("@solana/web3.js");
 const {
   TOKEN_PROGRAM_ID,
-  ASSOCIATED_TOKEN_PROGRAM_ID,
   createMint,
   getOrCreateAssociatedTokenAccount,
-  getAssociatedTokenAddress,
-  setAuthority,
-  AuthorityType
+  mintTo,
+  getAssociatedTokenAddress
 } = require("@solana/spl-token");
 
 // Setup connection
@@ -142,13 +102,12 @@ const provider = new anchor.AnchorProvider(connection, wallet, {
 anchor.setProvider(provider);
 
 // Load program
-const programId = new PublicKey("6Bg1RuRv2yHxJbSodDMKH2dFbDQKGeZwKkDhzZxXQ7xc");
+const programId = new PublicKey("BLM1UpG3ZJQnini6sG3oqznTQnsZCCuPUaLDVHEH4Ka1");
 const idl = await anchor.Program.fetchIdl(programId, provider);
 const program = new anchor.Program(idl, provider);
 
-// Step 1: Create token
-console.log("Creating token...");
-const tokenMint = await createMint(
+// Step 1: Create LP token (or use existing)
+const lpTokenMint = await createMint(
   connection,
   wallet.payer,
   wallet.publicKey,
@@ -156,32 +115,56 @@ const tokenMint = await createMint(
   9
 );
 
-// Step 2: Calculate PDAs
-const [vestingPDA] = PublicKey.findProgramAddressSync(
-  [Buffer.from("vesting_halving"), tokenMint.toBuffer()],
+// Step 2: Get your LP token account
+const userTokenAccount = await getOrCreateAssociatedTokenAccount(
+  connection,
+  wallet.payer,
+  lpTokenMint,
+  wallet.publicKey
+);
+
+// Mint some LP tokens for testing
+await mintTo(
+  connection,
+  wallet.payer,
+  lpTokenMint,
+  userTokenAccount.address,
+  wallet.publicKey,
+  1000 * 1e9
+);
+
+// Step 3: Calculate lock PDA
+const [lockPDA] = PublicKey.findProgramAddressSync(
+  [
+    Buffer.from("lock"),
+    lpTokenMint.toBuffer(),
+    wallet.publicKey.toBuffer()
+  ],
   programId
 );
 
+// Step 4: Get vault ATA
 const vaultATA = await getAssociatedTokenAddress(
-  tokenMint,
-  vestingPDA,
+  lpTokenMint,
+  lockPDA,
   true
 );
 
-// Step 3: Initialize vesting
-console.log("Initializing vesting...");
-const initialSupply = new anchor.BN(1_000_000 * 1e9); // 1M tokens
-const halvingInterval = new anchor.BN(30 * 24 * 60 * 60); // 30 days
+// Step 5: Initialize lock (1 year)
+const lockAmount = new anchor.BN(500 * 1e9); // 500 tokens
+const unlockTime = new anchor.BN(
+  Math.floor(Date.now() / 1000) + (365 * 24 * 60 * 60)
+);
 
+console.log("Initializing lock...");
 await program.methods
-  .initializeVestingHalving(initialSupply, halvingInterval)
+  .initializeLock(lockAmount, unlockTime)
   .accounts({
-    vestingHalving: vestingPDA,
-    tokenMint: tokenMint,
+    lock: lockPDA,
+    tokenMint: lpTokenMint,
+    userTokenAccount: userTokenAccount.address,
     vaultTokenAccount: vaultATA,
-    beneficiary: wallet.publicKey,
-    mintAuthority: wallet.publicKey,
-    payer: wallet.publicKey,
+    authority: wallet.publicKey,
     tokenProgram: TOKEN_PROGRAM_ID,
     associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
     systemProgram: SystemProgram.programId,
@@ -189,141 +172,142 @@ await program.methods
   })
   .rpc();
 
-// Step 4: Transfer mint authority
-console.log("Transferring mint authority...");
-await setAuthority(
-  connection,
-  wallet.payer,
-  tokenMint,
-  wallet.publicKey,
-  AuthorityType.MintTokens,
-  vestingPDA
-);
+console.log("✅ Liquidity locked!");
+console.log("Lock PDA:", lockPDA.toString());
+console.log("Unlock time:", new Date(unlockTime.toNumber() * 1000));
 
-console.log("✅ Vesting initialized!");
-console.log("Token Mint:", tokenMint.toString());
-console.log("Vesting PDA:", vestingPDA.toString());
-console.log("Vault:", vaultATA.toString());
+// Step 6: Check lock status
+const lockAccount = await program.account.lock.fetch(lockPDA);
+console.log("Locked amount:", lockAccount.amount.toString());
+console.log("Unlock time:", new Date(lockAccount.unlockTime.toNumber() * 1000));
 
-// Step 5: Claim Period 0 (available immediately)
-console.log("\nClaiming Period 0...");
-const beneficiaryATA = await getOrCreateAssociatedTokenAccount(
-  connection,
-  wallet.payer,
-  tokenMint,
-  wallet.publicKey
-);
+// ... Wait for unlock time ...
 
+// Step 7: Unlock after time passes
+console.log("Unlocking tokens...");
 await program.methods
-  .claimVestingPeriod()
+  .unlock()
   .accounts({
-    vestingHalving: vestingPDA,
-    tokenMint: tokenMint,
+    lock: lockPDA,
+    tokenMint: lpTokenMint,
     vaultTokenAccount: vaultATA,
-    beneficiaryTokenAccount: beneficiaryATA.address,
-    beneficiary: wallet.publicKey,
+    userTokenAccount: userTokenAccount.address,
+    authority: wallet.publicKey,
     tokenProgram: TOKEN_PROGRAM_ID,
   })
   .rpc();
 
-console.log("✅ Claimed Period 0!");
-
-// Check balance
-const balance = await connection.getTokenAccountBalance(beneficiaryATA.address);
-console.log("Balance:", balance.value.uiAmount);
+console.log("✅ Tokens unlocked!");
 ```
 
 ---
 
 ## Advanced Examples
 
-### 1. Multi-Period Claim Script
+### 1. Extend Lock Duration
 ```javascript
-async function claimAllAvailablePeriods() {
-  const config = await program.account.vestingHalvingConfig.fetch(vestingPDA);
-  const currentTime = Math.floor(Date.now() / 1000);
-  const elapsed = currentTime - config.startTime.toNumber();
-  const periodsUnlocked = Math.floor(elapsed / config.halvingInterval.toNumber());
+async function extendLock(lockPDA, additionalSeconds) {
+  const lockAccount = await program.account.lock.fetch(lockPDA);
+  const currentUnlock = lockAccount.unlockTime.toNumber();
+  const newUnlock = new anchor.BN(currentUnlock + additionalSeconds);
   
-  console.log(`Periods unlocked: ${periodsUnlocked}`);
-  console.log(`Current period: ${config.currentPeriod}`);
-  
-  for (let i = config.currentPeriod; i <= periodsUnlocked; i++) {
-    if (config.periodSupply.toNumber() === 0) {
-      console.log("All periods claimed!");
-      break;
-    }
-    
-    console.log(`Claiming period ${i}...`);
-    try {
-      await program.methods
-        .claimVestingPeriod()
-        .accounts({
-          vestingHalving: vestingPDA,
-          tokenMint: tokenMint,
-          vaultTokenAccount: vaultATA,
-          beneficiaryTokenAccount: beneficiaryATA.address,
-          beneficiary: wallet.publicKey,
-          tokenProgram: TOKEN_PROGRAM_ID,
-        })
-        .rpc();
-      
-      console.log(`✅ Claimed period ${i}`);
-    } catch (error) {
-      console.log(`Period ${i} not ready or already claimed`);
-      break;
-    }
-  }
-}
-```
-
-### 2. Monitor Vesting Schedule
-```javascript
-async function getVestingSchedule() {
-  const config = await program.account.vestingHalvingConfig.fetch(vestingPDA);
-  
-  const schedule = [];
-  let periodSupply = config.initialSupply.toNumber();
-  const startTime = config.startTime.toNumber();
-  const interval = config.halvingInterval.toNumber();
-  
-  for (let period = 0; period < 10; period++) {
-    if (periodSupply === 0) break;
-    
-    const unlockTime = new Date((startTime + period * interval) * 1000);
-    const isUnlocked = Date.now() / 1000 >= (startTime + period * interval);
-    
-    schedule.push({
-      period,
-      amount: periodSupply / 1e9,
-      unlockTime: unlockTime.toISOString(),
-      isUnlocked,
-      isClaimed: period < config.currentPeriod
-    });
-    
-    periodSupply = Math.floor(periodSupply / 2);
-  }
-  
-  return schedule;
-}
-
-// Usage
-const schedule = await getVestingSchedule();
-console.table(schedule);
-```
-
-### 3. Transfer Beneficiary
-```javascript
-async function transferBeneficiary(newBeneficiary) {
   await program.methods
-    .updateBeneficiary(newBeneficiary)
+    .extendLock(newUnlock)
     .accounts({
-      vestingHalving: vestingPDA,
-      beneficiary: wallet.publicKey,
+      lock: lockPDA,
+      authority: wallet.publicKey,
     })
     .rpc();
   
-  console.log("✅ Beneficiary updated to:", newBeneficiary.toString());
+  console.log("✅ Lock extended to:", new Date(newUnlock.toNumber() * 1000));
+}
+
+// Extend by 6 months
+await extendLock(lockPDA, 180 * 24 * 60 * 60);
+```
+
+### 2. Transfer Lock Ownership
+```javascript
+async function transferLock(lockPDA, newOwner) {
+  await program.methods
+    .transferLock(newOwner)
+    .accounts({
+      lock: lockPDA,
+      authority: wallet.publicKey,
+    })
+    .rpc();
+  
+  console.log("✅ Lock transferred to:", newOwner.toString());
+}
+
+// Transfer to another wallet
+const newOwner = new PublicKey("...");
+await transferLock(lockPDA, newOwner);
+```
+
+### 3. Monitor Multiple Locks
+```javascript
+async function getAllUserLocks(userPubkey) {
+  // Get all lock accounts for a user
+  const locks = await connection.getProgramAccounts(programId, {
+    filters: [
+      {
+        memcmp: {
+          offset: 8, // After discriminator
+          bytes: userPubkey.toBase58(),
+        }
+      }
+    ]
+  });
+  
+  const lockData = [];
+  for (const { pubkey, account } of locks) {
+    const data = program.coder.accounts.decode("Lock", account.data);
+    lockData.push({
+      address: pubkey.toString(),
+      amount: data.amount.toString(),
+      unlockTime: new Date(data.unlockTime.toNumber() * 1000),
+      isUnlocked: Date.now() / 1000 >= data.unlockTime.toNumber()
+    });
+  }
+  
+  return lockData;
+}
+
+// Usage
+const userLocks = await getAllUserLocks(wallet.publicKey);
+console.table(userLocks);
+```
+
+### 4. Time-Until-Unlock Calculator
+```javascript
+async function getTimeUntilUnlock(lockPDA) {
+  const lockAccount = await program.account.lock.fetch(lockPDA);
+  const unlockTime = lockAccount.unlockTime.toNumber();
+  const now = Math.floor(Date.now() / 1000);
+  
+  if (now >= unlockTime) {
+    return { canUnlock: true, timeRemaining: 0 };
+  }
+  
+  const secondsRemaining = unlockTime - now;
+  const days = Math.floor(secondsRemaining / 86400);
+  const hours = Math.floor((secondsRemaining % 86400) / 3600);
+  const minutes = Math.floor((secondsRemaining % 3600) / 60);
+  
+  return {
+    canUnlock: false,
+    timeRemaining: secondsRemaining,
+    formatted: `${days}d ${hours}h ${minutes}m`
+  };
+}
+
+// Usage
+const status = await getTimeUntilUnlock(lockPDA);
+if (status.canUnlock) {
+  console.log("✅ Ready to unlock!");
+} else {
+  console.log(`⏰ Time remaining: ${status.formatted}`);
 }
 ```
 
@@ -331,53 +315,123 @@ async function transferBeneficiary(newBeneficiary) {
 
 ## Integration Guide
 
-### React Integration
+### React Component
 ```jsx
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { Program, AnchorProvider } from '@coral-xyz/anchor';
-import { PublicKey } from '@solana/web3.js';
+import { PublicKey, SystemProgram } from '@solana/web3.js';
+import { useState, useEffect } from 'react';
 
-function VestingClaimButton({ tokenMint }) {
+function LiquidityLockPanel({ lpTokenMint }) {
   const { connection } = useConnection();
   const wallet = useWallet();
+  const [lockData, setLockData] = useState(null);
+  const [loading, setLoading] = useState(false);
   
-  const handleClaim = async () => {
-    const provider = new AnchorProvider(connection, wallet, {});
-    const programId = new PublicKey("6Bg1RuRv2yHxJbSodDMKH2dFbDQKGeZwKkDhzZxXQ7xc");
-    const idl = await Program.fetchIdl(programId, provider);
-    const program = new Program(idl, provider);
+  const programId = new PublicKey("BLM1UpG3ZJQnini6sG3oqznTQnsZCCuPUaLDVHEH4Ka1");
+  
+  // Derive lock PDA
+  const [lockPDA] = PublicKey.findProgramAddressSync(
+    [
+      Buffer.from("lock"),
+      lpTokenMint.toBuffer(),
+      wallet.publicKey.toBuffer()
+    ],
+    programId
+  );
+  
+  // Load lock data
+  useEffect(() => {
+    if (!wallet.publicKey) return;
     
-    const [vestingPDA] = PublicKey.findProgramAddressSync(
-      [Buffer.from("vesting_halving"), tokenMint.toBuffer()],
-      programId
-    );
+    const loadLock = async () => {
+      const provider = new AnchorProvider(connection, wallet, {});
+      const idl = await Program.fetchIdl(programId, provider);
+      const program = new Program(idl, provider);
+      
+      try {
+        const lock = await program.account.lock.fetch(lockPDA);
+        setLockData(lock);
+      } catch (e) {
+        setLockData(null); // Lock doesn't exist
+      }
+    };
     
-    // ... claim logic
+    loadLock();
+  }, [wallet.publicKey, lpTokenMint]);
+  
+  const handleLock = async (amount, days) => {
+    setLoading(true);
+    try {
+      const provider = new AnchorProvider(connection, wallet, {});
+      const program = new Program(idl, provider);
+      
+      const unlockTime = Math.floor(Date.now() / 1000) + (days * 86400);
+      
+      await program.methods
+        .initializeLock(
+          new BN(amount * 1e9),
+          new BN(unlockTime)
+        )
+        .accounts({...})
+        .rpc();
+      
+      alert("✅ Liquidity locked!");
+    } catch (err) {
+      alert("Error: " + err.message);
+    } finally {
+      setLoading(false);
+    }
   };
   
-  return <button onClick={handleClaim}>Claim Tokens</button>;
+  return (
+    <div>
+      {lockData ? (
+        <div>
+          <h3>Locked: {lockData.amount.toString()} tokens</h3>
+          <p>Unlocks: {new Date(lockData.unlockTime * 1000).toLocaleString()}</p>
+        </div>
+      ) : (
+        <button onClick={() => handleLock(1000, 365)}>
+          Lock Liquidity (1 year)
+        </button>
+      )}
+    </div>
+  );
 }
 ```
 
 ### Next.js API Route
 ```javascript
-// pages/api/vesting/claim.js
+// pages/api/locks/[user].js
 import { Connection, PublicKey } from '@solana/web3.js';
 import { Program, AnchorProvider, Wallet } from '@coral-xyz/anchor';
 
 export default async function handler(req, res) {
-  const { tokenMint, beneficiary } = req.body;
-  
-  const connection = new Connection("https://rpc.mainnet.x1.xyz");
-  // ... setup program
+  const { user } = req.query;
   
   try {
-    const tx = await program.methods
-      .claimVestingPeriod()
-      .accounts({...})
-      .rpc();
+    const connection = new Connection("https://rpc.mainnet.x1.xyz");
+    const programId = new PublicKey("BLM1UpG3ZJQnini6sG3oqznTQnsZCCuPUaLDVHEH4Ka1");
     
-    res.status(200).json({ success: true, signature: tx });
+    // Get all locks for user
+    const locks = await connection.getProgramAccounts(programId, {
+      filters: [{
+        memcmp: {
+          offset: 8,
+          bytes: user,
+        }
+      }]
+    });
+    
+    res.status(200).json({
+      user,
+      lockCount: locks.length,
+      locks: locks.map(l => ({
+        address: l.pubkey.toString(),
+        // ... decode data
+      }))
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -388,67 +442,97 @@ export default async function handler(req, res) {
 
 ## Common Use Cases
 
-### 1. Team Token Vesting
+### 1. DEX Liquidity Lock (Standard)
 ```javascript
-// 10M tokens, 6-month halving
-// Period 0: 10M  (immediate)
-// Period 1: 5M   (6 months)
-// Period 2: 2.5M (12 months)
-// Period 3: 1.25M (18 months)
+// Lock LP tokens for 1 year with standard settings
+const unlockTime = new BN(
+  Math.floor(Date.now() / 1000) + (365 * 86400)
+);
 
-const initialSupply = new anchor.BN(10_000_000 * 1e9);
-const halvingInterval = new anchor.BN(180 * 24 * 60 * 60); // 6 months
+await program.methods
+  .initializeLock(lpAmount, unlockTime)
+  .accounts({...})
+  .rpc();
 ```
 
-### 2. Advisor Tokens
+### 2. Team Token Lock (Extended)
 ```javascript
-// 100k tokens, quarterly halving
-const initialSupply = new anchor.BN(100_000 * 1e9);
-const halvingInterval = new anchor.BN(90 * 24 * 60 * 60); // 90 days
+// Lock team tokens for 3 years
+const unlockTime = new BN(
+  Math.floor(Date.now() / 1000) + (3 * 365 * 86400)
+);
+
+await program.methods
+  .initializeLock(teamTokens, unlockTime)
+  .accounts({...})
+  .rpc();
 ```
 
-### 3. Community Rewards
+### 3. Gradual Unlock (Multiple Locks)
 ```javascript
-// 1M tokens, monthly halving
-const initialSupply = new anchor.BN(1_000_000 * 1e9);
-const halvingInterval = new anchor.BN(30 * 24 * 60 * 60); // 30 days
+// Create 12 monthly locks instead of 1 yearly
+const monthlyAmount = totalAmount / 12;
+
+for (let i = 0; i < 12; i++) {
+  const unlockTime = new BN(
+    Math.floor(Date.now() / 1000) + ((i + 1) * 30 * 86400)
+  );
+  
+  await program.methods
+    .initializeLock(new BN(monthlyAmount), unlockTime)
+    .accounts({...})
+    .rpc();
+  
+  console.log(`✅ Lock ${i + 1}/12 created`);
+}
 ```
 
 ---
 
 ## Troubleshooting
 
-### Error: "Period not unlocked yet"
-**Cause:** Trying to claim before time has passed  
-**Solution:** Wait for halving interval or check current time vs unlock time
+### Error: "Unlock time not reached"
+
+**Cause:** Trying to unlock before time  
+**Solution:** Wait or check unlock time
 ```javascript
-const config = await program.account.vestingHalvingConfig.fetch(vestingPDA);
-const nextUnlock = config.startTime.toNumber() + 
-  (config.currentPeriod + 1) * config.halvingInterval.toNumber();
-console.log("Next unlock:", new Date(nextUnlock * 1000));
+const lock = await program.account.lock.fetch(lockPDA);
+const now = Math.floor(Date.now() / 1000);
+if (now < lock.unlockTime.toNumber()) {
+  console.log("Wait until:", new Date(lock.unlockTime.toNumber() * 1000));
+}
 ```
 
-### Error: "All periods claimed"
-**Cause:** Supply exhausted  
-**Solution:** All vesting periods have been claimed
+### Error: "Lock already exists"
 
-### Error: "Account not found"
-**Cause:** Vesting not initialized  
-**Solution:** Run `initializeVestingHalving` first
+**Cause:** PDA collision (same mint + authority)  
+**Solution:** One lock per mint+authority combo. Unlock existing or use different mint.
+
+### Error: "Insufficient token balance"
+
+**Cause:** Not enough tokens to lock  
+**Solution:** Check balance first
+```javascript
+const balance = await connection.getTokenAccountBalance(userTokenAccount.address);
+console.log("Available:", balance.value.uiAmount);
+```
 
 ### Transaction Fails Silently
-**Cause:** Insufficient SOL for transaction  
-**Solution:** Ensure wallet has >0.01 SOL for fees
+
+**Cause:** Insufficient SOL for fees  
+**Solution:** Ensure >0.01 SOL
 ```javascript
 const balance = await connection.getBalance(wallet.publicKey);
-console.log("SOL balance:", balance / 1e9);
+if (balance < 0.01 * 1e9) {
+  throw new Error("Need more SOL for fees");
+}
 ```
 
 ---
 
 ## Additional Resources
 
-- [Program Source Code](https://github.com/omenpotter/vesting-halving-program)
+- [Program Source Code](https://github.com/omenpotter/liquidity-lock-program)
 - [Security Policy](../SECURITY.md)
 - [API Reference](./API_REFERENCE.md)
 - [Architecture Diagram](./ARCHITECTURE.md)

@@ -1,6 +1,6 @@
-# Vesting Halving Program - Architecture
+# Liquidity Lock Program - Architecture
 
-Visual guide to understanding how the Vesting Halving Program works.
+Visual guide to understanding how the Liquidity Lock Program works.
 
 ## Table of Contents
 1. [System Overview](#system-overview)
@@ -16,11 +16,11 @@ Visual guide to understanding how the Vesting Halving Program works.
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                                                                 │
-│              VESTING HALVING PROGRAM                           │
-│         6Bg1RuRv2yHxJbSodDMKH2dFbDQKGeZwKkDhzZxXQ7xc          │
+│              LIQUIDITY LOCK PROGRAM                            │
+│         BLM1UpG3ZJQnini6sG3oqznTQnsZCCuPUaLDVHEH4Ka1          │
 │                                                                 │
-│  Bitcoin-style halving with time-locked vesting                │
-│  All tokens minted upfront, released on schedule               │
+│  Time-locked token custody for liquidity protection            │
+│  Prevents rug pulls and ensures project commitment             │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
                               │
@@ -29,11 +29,11 @@ Visual guide to understanding how the Vesting Halving Program works.
             │                 │                 │
             ▼                 ▼                 ▼
     ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-    │   Vesting    │  │     Vault    │  │ Beneficiary  │
+    │   Lock       │  │     Vault    │  │    Owner     │
     │   PDA        │  │     ATA      │  │   Account    │
     │              │  │              │  │              │
-    │  Config &    │  │  All tokens  │  │  Receives    │
-    │  Authority   │  │  locked here │  │  claims      │
+    │  Config &    │  │  Locked LP   │  │  Receives    │
+    │  Authority   │  │  tokens      │  │  unlock      │
     └──────────────┘  └──────────────┘  └──────────────┘
 ```
 
@@ -44,54 +44,50 @@ Visual guide to understanding how the Vesting Halving Program works.
 ### Core Components
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     TOKEN MINT                              │
-│  SPL Token with 9 decimals (standard)                      │
-│  Mint Authority: Vesting PDA (after initialization)        │
+│                     LP TOKEN MINT                           │
+│  Standard SPL Token (e.g., DEX LP token)                   │
+│  No special requirements                                    │
 └─────────────────────────────────────────────────────────────┘
                               │
-                              │ controls
+                              │ associated with
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                   VESTING PDA                               │
+│                      LOCK PDA                               │
 │                                                             │
-│  Seeds: ["vesting_halving", token_mint]                    │
+│  Seeds: ["lock", token_mint, authority]                    │
 │                                                             │
 │  Stores:                                                    │
-│  • Beneficiary address                                      │
-│  • Initial supply                                           │
-│  • Current period (0, 1, 2...)                             │
-│  • Period supply (halves each time)                         │
-│  • Start time                                               │
-│  • Halving interval                                         │
-│  • Total claimed                                            │
+│  • Authority (owner pubkey)                                 │
+│  • Token mint                                               │
+│  • Locked amount                                            │
+│  • Unlock timestamp                                         │
+│  • Bump seed                                                │
 │                                                             │
-│  Authority over:                                            │
-│  • Vault ATA (can transfer)                                 │
-│  • Token Mint (can mint - but only used once)              │
+│  Unique per: (token_mint, authority) pair                  │
+│  One lock per token per user                                │
 └─────────────────────────────────────────────────────────────┘
                               │
                               │ owns
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                     VAULT ATA                               │
-│  Associated Token Account owned by Vesting PDA             │
+│  Associated Token Account owned by Lock PDA                │
 │                                                             │
-│  Initial Balance: initial_supply × 2                        │
-│  (e.g., 200,000 tokens for 100k initial)                   │
+│  Holds: All locked LP tokens                                │
+│  Cannot be accessed until unlock_time                       │
 │                                                             │
-│  Tokens Released:                                           │
-│  • Period 0: 100,000 → Beneficiary                         │
-│  • Period 1: 50,000  → Beneficiary                         │
-│  • Period 2: 25,000  → Beneficiary                         │
-│  • Etc...                                                   │
+│  Protected by:                                              │
+│  • Lock PDA authority                                       │
+│  • Time lock (Clock sysvar)                                 │
+│  • Program logic                                            │
 └─────────────────────────────────────────────────────────────┘
                               │
-                              │ transfers to
+                              │ returns to (after unlock)
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
-│               BENEFICIARY TOKEN ACCOUNT                     │
-│  Regular ATA owned by beneficiary                          │
-│  Receives tokens when claim_vesting_period() is called     │
+│               USER TOKEN ACCOUNT                            │
+│  Regular ATA owned by authority                            │
+│  Receives tokens when unlock() is called                    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -99,50 +95,42 @@ Visual guide to understanding how the Vesting Halving Program works.
 
 ## Data Flow
 
-### Initialization Flow
+### Lock Creation Flow
 ```
-Step 1: User Creates Token
-┌──────────┐
-│  User    │──► createMint()
-└──────────┘         │
-                     ▼
-              ┌─────────────┐
-              │ Token Mint  │
-              │ Authority:  │
-              │ User        │
-              └─────────────┘
+Step 1: User Has LP Tokens
+┌──────────────┐
+│    User      │
+│  LP tokens:  │
+│  1000        │
+└──────────────┘
 
-Step 2: Initialize Vesting
-┌──────────┐
-│  User    │──► initialize_vesting_halving(100k, 365d)
-└──────────┘         │
-                     ▼
-              ┌─────────────┐
-              │ Create PDA  │
-              │ Create Vault│
-              │ Mint 200k   │──► All tokens to vault
-              └─────────────┘
-                     │
-                     ▼
-              ┌─────────────┐
-              │ Vault ATA   │
-              │ Balance:    │
-              │ 200,000     │
-              └─────────────┘
+Step 2: Initialize Lock
+┌──────────────┐
+│    User      │──► initialize_lock(1000, unlock_time)
+└──────────────┘         │
+                         ▼
+                  ┌─────────────┐
+                  │ Create PDA  │
+                  │ Create Vault│
+                  │ Transfer LP │──► 1000 LP to vault
+                  └─────────────┘
+                         │
+                         ▼
+                  ┌─────────────┐
+                  │ Vault ATA   │
+                  │ Balance:    │
+                  │ 1000 LP     │ 🔒 LOCKED
+                  └─────────────┘
 
-Step 3: Transfer Authority
-┌──────────┐
-│  User    │──► setAuthority(vestingPDA)
-└──────────┘         │
-                     ▼
-              ┌─────────────┐
-              │ Token Mint  │
-              │ Authority:  │
-              │ Vesting PDA │ ✅ Locked!
-              └─────────────┘
+Step 3: Tokens Locked
+┌──────────────┐
+│    User      │
+│  LP tokens:  │
+│  0           │ ← Transferred to vault
+└──────────────┘
 ```
 
-### Claim Flow
+### Unlock Flow
 ```
 Time Check Flow:
 ┌──────────────┐
@@ -151,13 +139,7 @@ Time Check Flow:
        │
        ▼
 ┌─────────────────────────────────┐
-│ Elapsed = now - start_time      │
-│ Period = Elapsed / interval     │
-└─────────────────────────────────┘
-       │
-       ▼
-┌─────────────────────────────────┐
-│ Is Period >= Current Period?    │
+│ now >= unlock_time?             │
 └─────────────────────────────────┘
        │               │
       NO              YES
@@ -166,37 +148,67 @@ Time Check Flow:
    ❌ Error      ✅ Continue
 
 
-Token Transfer Flow:
+Token Return Flow:
 ┌─────────────┐
 │ Vault       │
-│ 200k tokens │
+│ 1000 LP     │
 └─────────────┘
        │
-       │ claim_vesting_period()
-       │ transfers period_supply
+       │ unlock() transfers all
        ▼
 ┌─────────────┐
-│ Beneficiary │
+│ User        │
 │ receives    │
-│ tokens      │
+│ 1000 LP     │ ✅ UNLOCKED
 └─────────────┘
+       │
+       │ Account closed
+       ▼
+┌─────────────┐
+│ Lock PDA    │
+│ CLOSED      │ → Rent returned
+└─────────────┘
+```
 
-
-State Update Flow:
+### Extension Flow
+```
+Current State:
 ┌─────────────────────────────────┐
-│ Before Claim:                   │
-│ • current_period = 0            │
-│ • period_supply = 100k          │
-│ • total_claimed = 0             │
+│ Lock                            │
+│ unlock_time: Jan 1, 2027        │
+└─────────────────────────────────┘
+
+extend_lock(new_time):
+┌─────────────────────────────────┐
+│ Validate:                       │
+│ new_time > current unlock_time  │
 └─────────────────────────────────┘
        │
-       │ After claim_vesting_period()
        ▼
 ┌─────────────────────────────────┐
-│ After Claim:                    │
-│ • current_period = 1            │
-│ • period_supply = 50k (halved!) │
-│ • total_claimed = 100k          │
+│ Updated Lock                    │
+│ unlock_time: Jul 1, 2027        │ ✅ Extended
+└─────────────────────────────────┘
+```
+
+### Transfer Flow
+```
+Original Owner:
+┌─────────────────────────────────┐
+│ Lock                            │
+│ authority: User A               │
+└─────────────────────────────────┘
+
+transfer_lock(user_b):
+┌─────────────────────────────────┐
+│ Validate:                       │
+│ caller == current authority     │
+└─────────────────────────────────┘
+       │
+       ▼
+┌─────────────────────────────────┐
+│ Updated Lock                    │
+│ authority: User B               │ ✅ Transferred
 └─────────────────────────────────┘
 ```
 
@@ -204,75 +216,63 @@ State Update Flow:
 
 ## State Machine
 
-### Period Progression
+### Lock Lifecycle
 ```
 ┌────────────────────────────────────────────────────────────┐
-│                     PERIOD 0                               │
-│  Supply: 100,000                                           │
-│  Unlock: Immediate                                         │
-│  Status: Claimable ✅                                      │
+│                    NON-EXISTENT                            │
+│  No lock created yet                                       │
 └────────────────────────────────────────────────────────────┘
                          │
-                         │ claim_vesting_period()
-                         │ + 365 days elapsed
+                         │ initialize_lock()
                          ▼
 ┌────────────────────────────────────────────────────────────┐
-│                     PERIOD 1                               │
-│  Supply: 50,000 (halved)                                   │
-│  Unlock: Day 365                                           │
-│  Status: Time-locked 🔒 → Claimable ✅                    │
+│                      LOCKED                                │
+│  Tokens in vault                                           │
+│  unlock_time in future                                     │
+│  Can: extend, transfer                                     │
+│  Cannot: unlock                                            │
 └────────────────────────────────────────────────────────────┘
                          │
-                         │ claim_vesting_period()
-                         │ + 365 days elapsed
+          ┌──────────────┼──────────────┐
+          │              │              │
+          │              │              │
+          ▼              ▼              ▼
+    ┌──────────┐  ┌──────────┐  ┌──────────┐
+    │ extend() │  │transfer()│  │Time passes│
+    └──────────┘  └──────────┘  └──────────┘
+          │              │              │
+          │              │              │
+          └──────────────┴──────────────┘
+                         │
+                         │ now >= unlock_time
                          ▼
 ┌────────────────────────────────────────────────────────────┐
-│                     PERIOD 2                               │
-│  Supply: 25,000 (halved)                                   │
-│  Unlock: Day 730                                           │
-│  Status: Time-locked 🔒 → Claimable ✅                    │
+│                    UNLOCKABLE                              │
+│  Time condition met                                        │
+│  Can: unlock                                               │
 └────────────────────────────────────────────────────────────┘
                          │
-                         │ continues...
+                         │ unlock()
                          ▼
-                      Period N
-                 Supply → 0 eventually
+┌────────────────────────────────────────────────────────────┐
+│                     UNLOCKED                               │
+│  Tokens returned to owner                                  │
+│  Lock account closed                                       │
+│  Rent returned                                             │
+└────────────────────────────────────────────────────────────┘
 ```
 
-### State Transitions
+### State Transitions Matrix
 ```
-        Initialize
-             │
-             ▼
-    ┌────────────────┐
-    │   INITIALIZED  │
-    │  Period 0      │
-    │  Ready to claim│
-    └────────────────┘
-             │
-             │ claim_vesting_period()
-             ▼
-    ┌────────────────┐
-    │  PERIOD_CLAIMED│
-    │  Advance to 1  │
-    │  Wait for time │
-    └────────────────┘
-             │
-             │ Time passes
-             ▼
-    ┌────────────────┐
-    │  PERIOD_READY  │
-    │  Period 1      │
-    │  Can claim     │
-    └────────────────┘
-             │
-             │ Repeats...
-             ▼
-    ┌────────────────┐
-    │   EXHAUSTED    │
-    │  supply = 0    │
-    │  All claimed ✅│
-    └────────────────┘
+Current State  │ Action        │ New State      │ Allowed?
+───────────────┼───────────────┼────────────────┼──────────
+NON-EXISTENT   │ initialize    │ LOCKED         │ ✅
+LOCKED         │ unlock        │ LOCKED         │ ❌ (time check fails)
+LOCKED         │ extend        │ LOCKED         │ ✅
+LOCKED         │ transfer      │ LOCKED         │ ✅
+UNLOCKABLE     │ unlock        │ UNLOCKED       │ ✅
+UNLOCKABLE     │ extend        │ LOCKED         │ ✅
+UNLOCKED       │ any           │ -              │ ❌ (closed)
 ```
 
 ---
@@ -286,23 +286,23 @@ State Update Flow:
                           │ owns
                           ▼
                    ┌─────────────┐
-                   │ Vesting PDA │ (Program Derived Address)
+                   │  Lock PDA   │ (Program Derived Address)
                    └─────────────┘
                           │
            ┌──────────────┼──────────────┐
            │              │              │
            ▼              ▼              ▼
     ┌──────────┐   ┌──────────┐   ┌──────────┐
-    │ Vault    │   │  Token   │   │  Config  │
-    │ ATA      │   │  Mint    │   │  Data    │
-    │          │   │ Authority│   │          │
-    │ (owned)  │   │ (control)│   │ (stored) │
+    │ Vault    │   │  Config  │   │ Authority│
+    │ ATA      │   │  Data    │   │ Reference│
+    │          │   │          │   │          │
+    │ (owned)  │   │ (stored) │   │ (field)  │
     └──────────┘   └──────────┘   └──────────┘
          │
-         │ transfers to
+         │ returns to
          ▼
     ┌──────────┐
-    │Beneficry │
+    │  User    │
     │   ATA    │
     └──────────┘
 ```
@@ -310,10 +310,11 @@ State Update Flow:
 ### PDA Derivation
 ```
 Input:
-├─ Program ID: 6Bg1RuRv2yHxJbSodDMKH2dFbDQKGeZwKkDhzZxXQ7xc
+├─ Program ID: BLM1UpG3ZJQnini6sG3oqznTQnsZCCuPUaLDVHEH4Ka1
 ├─ Seeds:
-│  ├─ "vesting_halving" (constant string)
-│  └─ token_mint pubkey (32 bytes)
+│  ├─ "lock" (constant string)
+│  ├─ token_mint pubkey (32 bytes)
+│  └─ authority pubkey (32 bytes)
 └─ Bump: Found automatically
 
 Process:
@@ -325,119 +326,147 @@ Process:
 └─────────────────────────────────────┘
 
 Output:
-└─ Vesting PDA (deterministic address)
+└─ Lock PDA (deterministic address)
+
+Uniqueness:
+Each (token_mint, authority) pair = unique PDA
+→ One lock per token per user
 ```
 
 ---
 
 ## Sequence Diagrams
 
-### Complete Initialization Sequence
+### Complete Lock & Unlock Sequence
 ```
-User         Program         Token Mint      Vault ATA      Clock
- │              │                 │              │           │
- │─────────────►│                 │              │           │
- │ create_mint  │                 │              │           │
- │              │────────────────►│              │           │
- │              │   initialize    │              │           │
- │◄─────────────│                 │              │           │
- │              │                 │              │           │
- │─────────────►│                 │              │           │
- │ initialize_  │                 │              │           │
- │ vesting_     │                 │              │           │
- │ halving()    │                 │              │           │
- │              │─────────────────────────────────────────►  │
- │              │         get current time                   │
- │              │◄─────────────────────────────────────────  │
- │              │                 │              │           │
- │              │────────────────────────────────►           │
- │              │       create vault ATA                     │
- │              │                 │              │           │
- │              │────────────────►│              │           │
- │              │  mint_to(200k) │              │           │
- │              │                 │─────────────►│           │
- │              │                 │  tokens      │           │
- │◄─────────────│                 │              │           │
- │              │                 │              │           │
- │─────────────►│                 │              │           │
- │ set_authority│                 │              │           │
- │   → PDA      │────────────────►│              │           │
- │              │  update authority               │           │
- │◄─────────────│                 │              │           │
+User       Program       Token Mint    Vault ATA    User ATA    Clock
+ │            │               │            │           │          │
+ │────────────►               │            │           │          │
+ │ initialize_ │               │            │           │          │
+ │ lock()      │               │            │           │          │
+ │            │───────────────────────────────────────────────────►
+ │            │          get current time                          │
+ │            │◄───────────────────────────────────────────────────
+ │            │               │            │           │          │
+ │            │───────────────────────────►│           │          │
+ │            │    create vault ATA                               │
+ │            │               │            │           │          │
+ │            │               │            │           │          │
+ │            │◄──────────────────────────────────────►│          │
+ │            │    transfer tokens (user → vault)                 │
+ │◄───────────│               │            │           │          │
+ │  success   │               │            │           │          │
+ │            │               │            │           │          │
+ │            │      ... TIME PASSES ...                          │
+ │            │               │            │           │          │
+ │────────────►               │            │           │          │
+ │ unlock()   │               │            │           │          │
+ │            │───────────────────────────────────────────────────►
+ │            │          check time >= unlock_time                │
+ │            │◄───────────────────────────────────────────────────
+ │            │  ✅ time check passed                             │
+ │            │               │            │           │          │
+ │            │◄──────────────────────────────────────►│          │
+ │            │    transfer tokens (vault → user)                 │
+ │            │               │            │           │          │
+ │            │    close lock account                             │
+ │            │    return rent                                    │
+ │◄───────────│               │            │           │          │
+ │  success + │               │            │           │          │
+ │    rent    │               │            │           │          │
 ```
 
-### Claim Sequence
+### Extend Lock Sequence
 ```
-User         Program         Vault ATA      Beneficiary ATA    Clock
- │              │                 │                │            │
- │─────────────►│                 │                │            │
- │ claim_vesting│                 │                │            │
- │ _period()    │                 │                │            │
- │              │─────────────────────────────────────────────►│
- │              │         check time elapsed                   │
- │              │◄─────────────────────────────────────────────│
- │              │  time_period = elapsed / interval            │
- │              │                 │                │            │
- │              │  ✅ time_period >= current_period            │
- │              │                 │                │            │
- │              │────────────────►│                │            │
- │              │  transfer tokens│                │            │
- │              │                 │───────────────►│            │
- │              │                 │   100k tokens  │            │
- │              │                 │                │            │
- │              │  Update state:                                │
- │              │  • period++                                   │
- │              │  • supply /= 2                                │
- │              │  • total_claimed += 100k                      │
- │◄─────────────│                 │                │            │
- │   success    │                 │                │            │
+User       Program       Lock PDA      Clock
+ │            │              │           │
+ │────────────►              │           │
+ │ extend_lock│              │           │
+ │ (new_time) │              │           │
+ │            │──────────────►           │
+ │            │  fetch current unlock    │
+ │            │◄──────────────           │
+ │            │              │           │
+ │            │              │           │
+ │            │  validate:               │
+ │            │  new_time > current      │
+ │            │              │           │
+ │            │──────────────►           │
+ │            │  update unlock_time      │
+ │◄───────────│              │           │
+ │  success   │              │           │
+```
+
+### Transfer Lock Sequence
+```
+Owner A    Program    Lock PDA    Owner B
+   │          │           │          │
+   │──────────►           │          │
+   │ transfer_│           │          │
+   │ lock(B)  │           │          │
+   │          │───────────►          │
+   │          │ fetch lock            │
+   │          │ verify authority = A  │
+   │          │                       │
+   │          │───────────►           │
+   │          │ update authority = B  │
+   │◄─────────│           │          │
+   │ success  │           │          │
+   │          │           │          │
+   │          │    Owner B can now:  │
+   │          │    • unlock          │
+   │          │    • extend          │
+   │          │    • transfer again  │
 ```
 
 ---
 
 ## Memory Layout
 
-### VestingHalvingConfig Account
+### Lock Account
 ```
-Byte Offset  Field                Type        Size
+Byte Offset  Field             Type        Size
 ─────────────────────────────────────────────────────
-0-7          Discriminator        u64         8
-8-39         beneficiary          Pubkey      32
-40-71        token_mint           Pubkey      32
-72-79        initial_supply       u64         8
-80-83        current_period       u32         4
-84-91        period_supply        u64         8
-92           claimed_this_period  bool        1
-93-100       total_claimed        u64         8
-101-108      start_time           i64         8
-109-116      halving_interval     i64         8
-117          bump                 u8          1
+0-7          Discriminator     u64         8
+8-39         authority         Pubkey      32
+40-71        token_mint        Pubkey      32
+72-79        amount            u64         8
+80-87        unlock_time       i64         8
+88           bump              u8          1
 ─────────────────────────────────────────────────────
-Total: 118 bytes
+Total: 89 bytes
 ```
 
 ---
 
 ## Security Architecture
 
-### Access Control
+### Access Control Matrix
 ```
-┌────────────────────────────────────────────────┐
-│         INSTRUCTION PERMISSIONS                │
-├────────────────────────────────────────────────┤
-│                                                │
-│  initialize_vesting_halving                    │
-│  • Signer: mint_authority ✅                  │
-│  • Signer: payer ✅                           │
-│                                                │
-│  claim_vesting_period                          │
-│  • Signer: beneficiary ✅                     │
-│  • Constraint: must match config.beneficiary  │
-│                                                │
-│  update_beneficiary                            │
-│  • Signer: current beneficiary ✅             │
-│                                                │
-└────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────┐
+│         INSTRUCTION PERMISSIONS                    │
+├────────────────────────────────────────────────────┤
+│                                                    │
+│  initialize_lock                                   │
+│  • Signer: authority ✅                           │
+│  • Owns: user_token_account ✅                    │
+│  • Has balance: amount ✅                         │
+│                                                    │
+│  unlock                                            │
+│  • Signer: authority ✅                           │
+│  • Constraint: authority == lock.authority        │
+│  • Time check: now >= unlock_time ✅              │
+│                                                    │
+│  extend_lock                                       │
+│  • Signer: authority ✅                           │
+│  • Constraint: authority == lock.authority        │
+│  • Constraint: new_time > current_time            │
+│                                                    │
+│  transfer_lock                                     │
+│  • Signer: authority ✅                           │
+│  • Constraint: authority == lock.authority        │
+│                                                    │
+└────────────────────────────────────────────────────┘
 ```
 
 ### Time-Lock Mechanism
@@ -446,64 +475,92 @@ Total: 118 bytes
 │     TIME-BASED ACCESS CONTROL           │
 ├─────────────────────────────────────────┤
 │                                         │
-│  Period Unlock Check:                   │
+│  Unlock Check:                          │
 │                                         │
-│  current_time >= unlock_time           │
-│                                         │
-│  where:                                 │
-│  unlock_time = start_time +            │
-│                (period × interval)      │
+│  Clock::get()?.unix_timestamp           │
+│         >=                              │
+│  lock.unlock_time                       │
 │                                         │
 │  Cannot be bypassed:                    │
-│  ✅ Uses Solana Clock sysvar            │
-│  ✅ Tamper-proof timestamp              │
+│  ✅ Clock sysvar is read-only           │
 │  ✅ Validators enforce consensus        │
+│  ✅ No backdoors or overrides           │
+│  ✅ No emergency withdrawal             │
+│                                         │
+└─────────────────────────────────────────┘
+```
+
+### Token Custody
+```
+┌─────────────────────────────────────────┐
+│       VAULT PROTECTION                  │
+├─────────────────────────────────────────┤
+│                                         │
+│  Vault ATA owned by Lock PDA            │
+│  └─ Only program can sign for PDA      │
+│                                         │
+│  Transfer requires:                     │
+│  1. Valid instruction                   │
+│  2. Correct PDA derivation              │
+│  3. Time lock satisfied (for unlock)    │
+│  4. Authority signature                 │
+│                                         │
+│  No other way to access tokens:         │
+│  ❌ Cannot close vault early            │
+│  ❌ Cannot transfer without unlock      │
+│  ❌ Cannot bypass program logic         │
 │                                         │
 └─────────────────────────────────────────┘
 ```
 
 ---
 
-## Halving Mathematics
+## Use Case Patterns
 
-### Geometric Series
+### Pattern 1: DEX Liquidity Lock
 ```
-Total Supply = Σ(initial / 2^n) for n = 0 to ∞
+┌──────────────────────────────────────────┐
+│  Token Launch Scenario                  │
+└──────────────────────────────────────────┘
 
-= initial × (1 + 1/2 + 1/4 + 1/8 + ...)
-= initial × 2
+Step 1: Create LP Pool
+   DEX: SOL-TOKEN pool
+   LP tokens minted: 1000
 
-Example: initial = 100,000
+Step 2: Lock LP Tokens
+   Lock: 800 LP (80%)
+   Duration: 1 year
+   Purpose: Prove commitment
 
-Period 0: 100,000 / 2^0 = 100,000
-Period 1: 100,000 / 2^1 =  50,000
-Period 2: 100,000 / 2^2 =  25,000
-Period 3: 100,000 / 2^3 =  12,500
-Period 4: 100,000 / 2^4 =   6,250
-...
-Total:                     200,000 (approaches)
+Step 3: After 1 Year
+   unlock() → retrieve 800 LP
+   Option: Remove liquidity or re-lock
 ```
 
-### Practical Example
+### Pattern 2: Team Token Vesting
 ```
-Timeline for 100k initial, 365 day interval:
+┌──────────────────────────────────────────┐
+│  Team Token Distribution                 │
+└──────────────────────────────────────────┘
 
-┌───────┬──────────────┬─────────────┬──────────────┐
-│ Period│ Unlock Date  │   Amount    │  Cumulative  │
-├───────┼──────────────┼─────────────┼──────────────┤
-│   0   │ Day 0        │   100,000   │   100,000    │
-│   1   │ Day 365      │    50,000   │   150,000    │
-│   2   │ Day 730      │    25,000   │   175,000    │
-│   3   │ Day 1,095    │    12,500   │   187,500    │
-│   4   │ Day 1,460    │     6,250   │   193,750    │
-│   5   │ Day 1,825    │     3,125   │   196,875    │
-│   6   │ Day 2,190    │     1,562   │   198,437    │
-│   7   │ Day 2,555    │       781   │   199,218    │
-│  ...  │    ...       │      ...    │   → 200,000  │
-└───────┴──────────────┴─────────────┴──────────────┘
+Create multiple locks:
+   Lock 1: 25% → 6 months
+   Lock 2: 25% → 12 months
+   Lock 3: 25% → 18 months
+   Lock 4: 25% → 24 months
 
-Approaches 200k but never quite reaches it due to
-integer division (eventually hits 0)
+Gradual unlock over 2 years
+```
+
+### Pattern 3: Transferable Lock
+```
+┌──────────────────────────────────────────┐
+│  DAO Treasury Lock                       │
+└──────────────────────────────────────────┘
+
+Initial: Project owner creates lock
+Transfer: transfer_lock(dao_multisig)
+Result: DAO controls unlock
 ```
 
 ---
@@ -512,74 +569,80 @@ integer division (eventually hits 0)
 
 ### Compute Units
 ```
-Instruction                  Typical CU Usage
+Instruction        Typical CU    Notes
 ─────────────────────────────────────────────
-initialize_vesting_halving   ~50,000 CU
-claim_vesting_period         ~15,000 CU
-update_beneficiary           ~5,000 CU
+initialize_lock    ~60,000       Creates 2 accounts
+unlock            ~20,000       Transfer + close
+extend_lock       ~5,000        State update only
+transfer_lock     ~5,000        State update only
 ```
 
-### Transaction Costs (X1 Mainnet)
+### Storage Costs
 ```
-Operation                    Estimated Cost
-─────────────────────────────────────────────
-Initialize                   ~0.002 SOL
-Claim                        ~0.0005 SOL
-Update Beneficiary           ~0.0003 SOL
+Account          Size      Rent (SOL)
+──────────────────────────────────────
+Lock PDA         89 bytes  ~0.00063
+Vault ATA        165 bytes ~0.00203
+──────────────────────────────────────
+Total initial    254 bytes ~0.00266
+
+Recovered on unlock: ~0.00266 SOL returned
 ```
 
 ---
 
 ## Integration Patterns
 
-### Frontend Integration
+### Frontend Flow
 ```
 ┌────────────────┐
 │   React App    │
 │                │
-│  useWallet()   │
-│  useConnection │
+│  Connect       │
+│  Wallet        │
 └────────────────┘
         │
-        │ calls
+        │ derive PDA
         ▼
 ┌────────────────┐
-│  Anchor SDK    │
-│  Program       │
-│  Interface     │
+│  Check Lock    │
+│  Exists?       │
 └────────────────┘
         │
-        │ RPC
-        ▼
-┌────────────────┐
-│ X1 RPC Node    │
-│                │
-│ Vesting Program│
-└────────────────┘
+   ┌────┴────┐
+   │         │
+  NO        YES
+   │         │
+   ▼         ▼
+┌─────┐  ┌─────┐
+│Lock │  │Show │
+│ UI  │  │Lock │
+└─────┘  └─────┘
 ```
 
-### Backend Integration
+### Backend Monitoring
 ```
 ┌────────────────┐
-│  Node.js API   │
-│                │
-│  Express       │
+│  Cron Job      │
+│  (Every hour)  │
 └────────────────┘
-        │
         │
         ▼
 ┌────────────────┐
-│  @solana/web3  │
-│  @coral-xyz    │
-│  /anchor       │
+│ Query all      │
+│ locks for user │
 └────────────────┘
-        │
         │
         ▼
 ┌────────────────┐
-│  Vesting PDA   │
-│  Read State    │
-│  Send Tx       │
+│ Check unlock   │
+│ times          │
+└────────────────┘
+        │
+        ▼
+┌────────────────┐
+│ Send alert if  │
+│ unlockable     │
 └────────────────┘
 ```
 
@@ -591,8 +654,8 @@ Update Beneficiary           ~0.0003 SOL
 │           X1 MAINNET CLUSTER                │
 │                                             │
 │  ┌────────────────────────────────────┐    │
-│  │   Vesting Halving Program          │    │
-│  │   6Bg1RuRv...Q7xc                  │    │
+│  │   Liquidity Lock Program           │    │
+│  │   BLM1UpG3...H4Ka1                 │    │
 │  │                                    │    │
 │  │   Deployed via:                    │    │
 │  │   solana program deploy            │    │
@@ -601,10 +664,11 @@ Update Beneficiary           ~0.0003 SOL
 │  │   Authority: C5V1AaFcE8W...        │    │
 │  └────────────────────────────────────┘    │
 │                                             │
-│  Multiple Vesting Instances:                │
+│  Multiple Lock Instances:                   │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐ │
-│  │ Vesting1 │  │ Vesting2 │  │ Vesting3 │ │
-│  │ PDA      │  │ PDA      │  │ PDA      │ │
+│  │ Lock 1   │  │ Lock 2   │  │ Lock 3   │ │
+│  │ User A   │  │ User A   │  │ User B   │ │
+│  │ Token X  │  │ Token Y  │  │ Token X  │ │
 │  └──────────┘  └──────────┘  └──────────┘ │
 │                                             │
 └─────────────────────────────────────────────┘
