@@ -1,128 +1,228 @@
-# Vesting Halving Program
+# Liquidity Lock Program
 
-Time-locked token vesting with automatic halving schedule for X1 blockchain.
+**Time-lock ANY SPL token with tamper-proof protection**
 
 ![Status](https://img.shields.io/badge/status-mainnet-success)
 ![Network](https://img.shields.io/badge/network-X1-blue)
 
 ## 🎯 Overview
 
-The Vesting Halving Program mints all tokens upfront to a vault and releases them on a Bitcoin-style halving schedule. Each period releases half the previous period's allocation.
+The Liquidity Lock Program provides time-based token custody for the X1 blockchain. Lock **any SPL token** for a specified duration with cryptographic guarantees that tokens cannot be accessed until the unlock time.
+
+**Originally designed for LP tokens, but works with ANY SPL token:**
+- 💧 LP tokens (DEX liquidity pairs)
+- 🪙 Project tokens
+- 🗳️ Governance tokens
+- 🖼️ NFTs
+- 💰 Any SPL-compatible token
 
 ## 📊 Program Information
 
-- **Program ID**: `6Bg1RuRv2yHxJbSodDMKH2dFbDQKGeZwKkDhzZxXQ7xc`
+- **Program ID**: `BLM1UpG3ZJQnini6sG3oqznTQnsZCCuPUaLDVHEH4Ka1`
 - **Network**: X1 Mainnet
-- **Deployment Signature**: `2VLi8xV71CJfLmnyxvN1hTpRfwa4rUCGg74fAsVHmPLG3m3Q2j7uwG8SPSpetD81ypHqm8tchd2GA9Qp5ppsW1Uf`
-- **Size**: 252 KB
+- **Size**: 230 KB
+- **Status**: ✅ Production Ready
 
 ## 🔑 Key Features
 
-✅ **All Tokens Vested Upfront** - Mints `initial_supply × 2` tokens to vault immediately  
-✅ **Time-Locked Halving** - Each period releases half of previous period  
-✅ **Immediate Period 0** - First allocation available instantly  
-✅ **One-Transaction Claims** - Simple `claim_vesting_period()` call  
-✅ **Transferable Beneficiary** - Update who can claim tokens  
+✅ **Universal Token Support** - Lock any SPL token  
+✅ **Time-Locked Security** - Cannot bypass unlock time  
+✅ **Extend Lock Period** - Increase lock duration anytime  
+✅ **Transfer Ownership** - Move lock to another wallet  
+✅ **Rent Recovery** - Get rent back when unlocking  
+✅ **No Fees** - Only standard Solana transaction costs  
 
-## 📈 How It Works
+## 💡 Use Cases
 
-### Initialization
+### 1. Liquidity Protection (Original Use)
+Lock DEX LP tokens to prove project commitment and prevent rug pulls.
 ```javascript
-// Example: 100,000 tokens with 365-day halving
+// Lock LP tokens for 1 year
 await program.methods
-  .initializeVestingHalving(
-    new BN(100_000 * 1e9),  // 100k tokens
-    new BN(31_536_000)       // 365 days in seconds
-  )
+  .initializeLock(
+    new BN(1000 * 1e9),
+    new BN(Date.now()/1000 + 31536000)
+  ).rpc();
+```
+
+### 2. Team Token Vesting
+Lock team allocations with time-based release.
+```javascript
+// Lock team tokens for 2 years
+await program.methods
+  .initializeLock(teamAmount, twoYearsLater).rpc();
+```
+
+### 3. Treasury Management
+Lock DAO or project treasury tokens for governance decisions.
+
+### 4. Investor Lock-ups
+Enforce cliff and vesting periods for early investors.
+
+### 5. Personal Token Savings
+Lock your own tokens for self-discipline or long-term holding.
+
+### 6. NFT Time Lock
+Lock NFTs (SPL tokens with supply=1) for future reveals or airdrops.
+
+## 🚀 Quick Start
+
+### Installation
+```bash
+npm install @coral-xyz/anchor @solana/web3.js @solana/spl-token
+```
+
+### Basic Usage
+```javascript
+const anchor = require("@coral-xyz/anchor");
+const { PublicKey } = require("@solana/web3.js");
+
+// Program ID
+const PROGRAM_ID = new PublicKey("BLM1UpG3ZJQnini6sG3oqznTQnsZCCuPUaLDVHEH4Ka1");
+
+// Lock tokens for 1 year
+const lockAmount = new BN(1000 * 1e9);
+const unlockTime = new BN(Math.floor(Date.now()/1000) + 31536000);
+
+await program.methods
+  .initializeLock(lockAmount, unlockTime)
+  .accounts({...})
   .rpc();
 ```
 
-**Result:**
-- 200,000 tokens minted to vault (100k × 2)
-- Period 0: 100,000 tokens (unlocked immediately)
-- Period 1: 50,000 tokens (unlocks after 365 days)
-- Period 2: 25,000 tokens (unlocks after 730 days)
-- Period 3: 12,500 tokens (unlocks after 1,095 days)
-- Continues halving...
+## 📖 Instructions
 
-### Claiming
-```javascript
-// Claim unlocked period
-await program.methods
-  .claimVestingPeriod()
-  .rpc();
+### `initialize_lock`
+Locks tokens in time-locked vault.
+
+**Parameters:**
+- `amount: u64` - Token amount (with decimals)
+- `unlock_time: i64` - Unix timestamp when unlockable
+
+### `unlock`
+Retrieves tokens after unlock time expires.
+
+### `extend_lock`
+Extends unlock time to later date.
+
+**Parameters:**
+- `new_unlock_time: i64` - New unlock timestamp
+
+### `transfer_lock`
+Transfers lock ownership to another wallet.
+
+**Parameters:**
+- `new_authority: Pubkey` - New owner address
+
+## 🎨 Architecture
 ```
-
-### Vesting Schedule Example
-
-| Period | Unlock Time | Amount    | Cumulative |
-|--------|------------|-----------|------------|
-| 0      | Day 0      | 100,000   | 100,000    |
-| 1      | Day 365    | 50,000    | 150,000    |
-| 2      | Day 730    | 25,000    | 175,000    |
-| 3      | Day 1,095  | 12,500    | 187,500    |
-| 4      | Day 1,460  | 6,250     | 193,750    |
-| ...    | ...        | ...       | → 200,000  |
-
-## 🛠️ Instructions
-
-### `initialize_vesting_halving`
-Initializes the vesting schedule and mints all tokens to vault.
-
-**Parameters:**
-- `initial_supply: u64` - First period allocation (with decimals)
-- `halving_interval: i64` - Seconds between halvings
-
-**Note:** Transfer mint authority to the halving PDA after initialization.
-
-### `claim_vesting_period`
-Claims tokens for the current unlocked period.
-
-**Requirements:**
-- Period must be time-unlocked
-- Called by beneficiary
-- Tokens still available
-
-### `update_beneficiary`
-Transfers beneficiary rights to a new address.
-
-**Parameters:**
-- `new_beneficiary: Pubkey` - New beneficiary address
+┌─────────────┐
+│  SPL Token  │ (LP, governance, NFT, any token)
+└─────────────┘
+       │
+       │ Lock tokens
+       ▼
+┌─────────────┐
+│  Lock PDA   │ Time-locked vault
+│  (Secure)   │ Cannot access until unlock_time
+└─────────────┘
+       │
+       │ After unlock_time
+       ▼
+┌─────────────┐
+│    Owner    │ Receives tokens back
+└─────────────┘
+```
 
 ## 🔒 Security
 
+- ✅ Time-locked via Solana Clock sysvar (tamper-proof)
+- ✅ Only authority can unlock/extend/transfer
+- ✅ No emergency withdrawal or backdoors
 - ✅ Security.txt embedded on-chain
-- ✅ Time-locked vesting - cannot be rushed
-- ✅ Immutable supply calculation
 - ✅ Open source - MIT License
 
-## 🧪 Testing
+## 📚 Documentation
 
-Tested on X1 Testnet with multiple scenarios:
-- ✅ Initialization and minting
-- ✅ Immediate Period 0 claim
-- ✅ Time-locked period enforcement
-- ✅ Halving calculations
-- ✅ Multi-period claims
+- [Usage Guide](./docs/USAGE_GUIDE.md) - Complete examples and integration
+- [API Reference](./docs/API_REFERENCE.md) - Full technical reference
+- [Architecture](./docs/ARCHITECTURE.md) - System design and diagrams
 
-## 📝 Example Flow
-```bash
-# Day 0: Initialize
-initialize_vesting_halving(100_000, 365 days)
-→ 200,000 tokens minted to vault
+## 🧪 Examples
 
-# Day 0: Claim Period 0
-claim_vesting_period()
-→ Receive 100,000 tokens
-
-# Day 365: Claim Period 1
-claim_vesting_period()
-→ Receive 50,000 tokens
-
-# Day 730: Claim Period 2
-claim_vesting_period()
-→ Receive 25,000 tokens
+### Lock LP Tokens (1 Year)
+```javascript
+const lpAmount = new BN(1000 * 1e9);
+const oneYear = new BN(Date.now()/1000 + 31536000);
+await program.methods.initializeLock(lpAmount, oneYear).rpc();
 ```
+
+### Lock Team Tokens (2 Years)
+```javascript
+const teamTokens = new BN(100000 * 1e9);
+const twoYears = new BN(Date.now()/1000 + 63072000);
+await program.methods.initializeLock(teamTokens, twoYears).rpc();
+```
+
+### Lock NFT (1 Month)
+```javascript
+const oneNFT = new BN(1);
+const oneMonth = new BN(Date.now()/1000 + 2592000);
+await program.methods.initializeLock(oneNFT, oneMonth).rpc();
+```
+
+### Extend Lock Period
+```javascript
+const currentLock = await program.account.lock.fetch(lockPDA);
+const newTime = new BN(currentLock.unlockTime.toNumber() + 15552000); // +6 months
+await program.methods.extendLock(newTime).rpc();
+```
+
+### Transfer Lock to DAO
+```javascript
+const daoWallet = new PublicKey("...");
+await program.methods.transferLock(daoWallet).rpc();
+```
+
+## 🌐 Integration
+
+### React Component
+```jsx
+import { useWallet } from '@solana/wallet-adapter-react';
+
+function TokenLock({ tokenMint, amount, duration }) {
+  const wallet = useWallet();
+  
+  const lockTokens = async () => {
+    const unlockTime = Math.floor(Date.now()/1000) + duration;
+    await program.methods
+      .initializeLock(new BN(amount), new BN(unlockTime))
+      .rpc();
+  };
+  
+  return <button onClick={lockTokens}>Lock Tokens</button>;
+}
+```
+
+## 📊 Token Support
+
+| Token Type | Supported | Example |
+|------------|-----------|---------|
+| LP Tokens | ✅ | SOL-USDC LP |
+| Project Tokens | ✅ | Your token |
+| Governance | ✅ | DAO tokens |
+| NFTs | ✅ | Metaplex NFTs |
+| Stablecoins | ✅ | USDC, USDT |
+| Wrapped Tokens | ✅ | Wrapped SOL |
+| **ANY SPL Token** | ✅ | All compatible |
+
+## ⚠️ Important Notes
+
+- ✅ Works with **ANY** SPL token
+- ⏰ Time lock cannot be bypassed
+- 🔒 One lock per (token, wallet) pair
+- 💰 Rent recovered on unlock (~0.003 SOL)
+- 🚫 Cannot unlock before time expires
 
 ## 🔗 Links
 
@@ -134,21 +234,10 @@ claim_vesting_period()
 
 MIT License - See [LICENSE](./LICENSE) file
 
-## 🙏 Acknowledgments
+## 🙏 Built For
 
-Built for X1Nexus token launch platform.
+X1Nexus - Comprehensive token launch platform for X1 blockchain
 
-## 🔒 On-Chain Verification
-
-Security.txt is embedded on-chain and verified:
-```bash
-# Download and verify
-solana program dump 6Bg1RuRv2yHxJbSodDMKH2dFbDQKGeZwKkDhzZxXQ7xc program.so
-strings program.so | grep -A 5 "BEGIN SECURITY.TXT"
-```
-
-**Verified URLs:**
-- ✅ Project: https://github.com/omenpotter/vesting-halving-program
-- ✅ Security: https://github.com/omenpotter/vesting-halving-program/security/advisories/new
-- ✅ Policy: https://github.com/omenpotter/vesting-halving-program/blob/main/SECURITY.md
+**Other X1Nexus Programs:**
+- [Vesting Halving Program](https://github.com/omenpotter/vesting-halving-program) - Time-locked vesting with halving schedule
 
