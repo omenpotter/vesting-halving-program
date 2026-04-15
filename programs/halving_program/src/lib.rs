@@ -8,6 +8,7 @@ declare_id!("6Bg1RuRv2yHxJbSodDMKH2dFbDQKGeZwKkDhzZxXQ7xc");
 pub mod halving_program {
     use super::*;
 
+    /// Initialize vesting — vesting PDA must be pre-created by frontend
     pub fn initialize_vesting_halving(
         ctx: Context<InitializeVestingHalving>,
         initial_supply: u64,
@@ -28,10 +29,11 @@ pub mod halving_program {
         vesting.halving_interval = halving_interval;
         vesting.bump = ctx.bumps.vesting_halving;
         vesting.funded = false;
-        msg!("Vesting Halving initialized, awaiting fund_vault");
+        msg!("Vesting initialized");
         Ok(())
     }
 
+    /// Fund vault — mint tokens to pre-created vault ATA
     pub fn fund_vault(ctx: Context<FundVault>) -> Result<()> {
         let vesting = &mut ctx.accounts.vesting_halving;
         require!(!vesting.funded, VestingHalvingError::AlreadyFunded);
@@ -50,7 +52,7 @@ pub mod halving_program {
             total_vested,
         )?;
         vesting.funded = true;
-        msg!("Vault funded: {} tokens minted", total_vested);
+        msg!("Vault funded: {} tokens", total_vested);
         Ok(())
     }
 
@@ -81,22 +83,22 @@ pub mod halving_program {
             vesting.period_supply,
         )?;
         vesting.total_claimed += vesting.period_supply;
-        msg!("Claimed: {} tokens for period {}", vesting.period_supply, claim_period);
         vesting.current_period += 1;
         vesting.period_supply = vesting.period_supply / 2;
         vesting.claimed_this_period = false;
+        msg!("Claimed period");
         Ok(())
     }
 
     pub fn update_beneficiary(ctx: Context<UpdateBeneficiary>, new_beneficiary: Pubkey) -> Result<()> {
         ctx.accounts.vesting_halving.beneficiary = new_beneficiary;
-        msg!("Beneficiary updated");
         Ok(())
     }
 }
 
 #[derive(Accounts)]
 pub struct InitializeVestingHalving<'info> {
+    /// Vesting PDA — pre-allocated by frontend via SystemProgram::createAccount
     #[account(
         init,
         payer = payer,
@@ -105,11 +107,10 @@ pub struct InitializeVestingHalving<'info> {
         bump
     )]
     pub vesting_halving: Account<'info, VestingHalvingConfig>,
-    #[account(mut)]
     pub token_mint: Account<'info, Mint>,
+    /// Vault ATA — pre-created by frontend
     #[account(
-        init,
-        payer = payer,
+        mut,
         associated_token::mint = token_mint,
         associated_token::authority = vesting_halving,
     )]

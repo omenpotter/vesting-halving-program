@@ -1,14 +1,13 @@
 import * as anchor from "@coral-xyz/anchor";
 import { BN } from "@coral-xyz/anchor";
-import { PublicKey, Keypair, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createMint } from "@solana/spl-token";
+import { PublicKey, Keypair, SystemProgram, SYSVAR_RENT_PUBKEY, Transaction } from "@solana/web3.js";
+import { TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createMint, createAssociatedTokenAccountInstruction } from "@solana/spl-token";
 import { HalvingProgram } from "../target/types/halving_program";
 
 async function main() {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
   const program = anchor.workspace.HalvingProgram as anchor.Program<HalvingProgram>;
-
   console.log("Wallet:", provider.wallet.publicKey.toString());
 
   const mintKeypair = Keypair.generate();
@@ -18,7 +17,24 @@ async function main() {
   const [vestingPDA] = PublicKey.findProgramAddressSync(
     [Buffer.from("vesting_halving"), mint.toBuffer()], program.programId
   );
+  console.log("Vesting PDA:", vestingPDA.toString());
+
+  // allowOwnerOffCurve = true because vestingPDA is a PDA (off curve)
   const vaultATA = await getAssociatedTokenAddress(mint, vestingPDA, true, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID);
+  console.log("Vault ATA:", vaultATA.toString());
+
+  console.log("Step 0: Pre-create vault ATA...");
+  const createATAIx = createAssociatedTokenAccountInstruction(
+    provider.wallet.publicKey, // payer
+    vaultATA,                  // ata
+    vestingPDA,                // owner (PDA - off curve)
+    mint,                      // mint
+    TOKEN_PROGRAM_ID,
+    ASSOCIATED_TOKEN_PROGRAM_ID
+  );
+  const tx0 = new Transaction().add(createATAIx);
+  const sig0 = await provider.sendAndConfirm(tx0);
+  console.log("✅ Vault ATA created:", sig0);
 
   console.log("Step 1: initializeVestingHalving...");
   const tx1 = await program.methods
@@ -49,7 +65,7 @@ async function main() {
     })
     .rpc();
   console.log("✅ Step 2 TX:", tx2);
-  console.log("🎉 Both steps succeeded!");
+  console.log("🎉 All steps succeeded!");
 }
 
 main().catch(e => {
