@@ -100,7 +100,7 @@ pub mod halving_program {
 pub struct InitializeVestingHalving<'info> {
     /// Vesting PDA — pre-allocated by frontend via SystemProgram::createAccount
     #[account(
-        init,
+        init_if_needed,
         payer = payer,
         space = 8 + 32 + 32 + 8 + 4 + 8 + 1 + 8 + 8 + 8 + 1 + 1,
         seeds = [b"vesting_halving", token_mint.key().as_ref()],

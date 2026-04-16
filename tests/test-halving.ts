@@ -14,28 +14,41 @@ async function main() {
   const mint = await createMint(provider.connection, provider.wallet.payer, provider.wallet.publicKey, provider.wallet.publicKey, 0, mintKeypair);
   console.log("Mint:", mint.toString());
 
-  const [vestingPDA] = PublicKey.findProgramAddressSync(
+  const [vestingPDA, bump] = PublicKey.findProgramAddressSync(
     [Buffer.from("vesting_halving"), mint.toBuffer()], program.programId
   );
   console.log("Vesting PDA:", vestingPDA.toString());
 
-  // allowOwnerOffCurve = true because vestingPDA is a PDA (off curve)
   const vaultATA = await getAssociatedTokenAddress(mint, vestingPDA, true, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID);
-  console.log("Vault ATA:", vaultATA.toString());
 
-  console.log("Step 0: Pre-create vault ATA...");
+  // Step 0a: Pre-create vault ATA
+  console.log("Step 0a: Creating vault ATA...");
   const createATAIx = createAssociatedTokenAccountInstruction(
-    provider.wallet.publicKey, // payer
-    vaultATA,                  // ata
-    vestingPDA,                // owner (PDA - off curve)
-    mint,                      // mint
-    TOKEN_PROGRAM_ID,
-    ASSOCIATED_TOKEN_PROGRAM_ID
+    provider.wallet.publicKey, vaultATA, vestingPDA, mint, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
   );
-  const tx0 = new Transaction().add(createATAIx);
-  const sig0 = await provider.sendAndConfirm(tx0);
-  console.log("✅ Vault ATA created:", sig0);
+  const tx0a = new Transaction().add(createATAIx);
+  const sig0a = await provider.sendAndConfirm(tx0a);
+  console.log("✅ Vault ATA:", sig0a);
 
+  // Step 0b: Pre-create vesting PDA account via SystemProgram
+  console.log("Step 0b: Pre-creating vesting PDA account...");
+  const space = 8 + 32 + 32 + 8 + 4 + 8 + 1 + 8 + 8 + 8 + 1 + 1;
+  const lamports = await provider.connection.getMinimumBalanceForRentExemption(space);
+  const createPDAIx = SystemProgram.createAccountWithSeed({
+    fromPubkey: provider.wallet.publicKey,
+    newAccountPubkey: vestingPDA,
+    basePubkey: provider.wallet.publicKey,
+    seed: "",
+    lamports,
+    space,
+    programId: program.programId,
+  });
+  // Actually use createAccount directly since it's a PDA
+  // PDA can't be created with createAccount - use the program's init
+  // Skip this - let anchor handle it but with mut constraint now
+  console.log("Skipping PDA pre-create - program handles it");
+
+  // Step 1: initializeVestingHalving
   console.log("Step 1: initializeVestingHalving...");
   const tx1 = await program.methods
     .initializeVestingHalving(new BN(1000000), new BN(86400))
@@ -53,6 +66,7 @@ async function main() {
     .rpc();
   console.log("✅ Step 1 TX:", tx1);
 
+  // Step 2: fundVault
   console.log("Step 2: fundVault...");
   const tx2 = await program.methods
     .fundVault()
