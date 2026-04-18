@@ -40,14 +40,18 @@ pub mod halving_program {
         let total_vested = vesting.initial_supply
             .checked_mul(2)
             .ok_or(VestingHalvingError::Overflow)?;
+        let mint_key = vesting.token_mint;
+        let bump = vesting.bump;
+        let seeds = &[b"vesting_halving", mint_key.as_ref(), &[bump]];
         token::mint_to(
-            CpiContext::new(
+            CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 MintTo {
                     mint: ctx.accounts.token_mint.to_account_info(),
                     to: ctx.accounts.vault_token_account.to_account_info(),
-                    authority: ctx.accounts.mint_authority.to_account_info(),
+                    authority: vesting.to_account_info(),
                 },
+                &[seeds],
             ),
             total_vested,
         )?;
@@ -137,7 +141,6 @@ pub struct FundVault<'info> {
     pub token_mint: Account<'info, Mint>,
     #[account(mut)]
     pub vault_token_account: Account<'info, TokenAccount>,
-    pub mint_authority: Signer<'info>,
     pub token_program: Program<'info, Token>,
 }
 
